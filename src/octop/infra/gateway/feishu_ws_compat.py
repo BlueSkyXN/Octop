@@ -1,26 +1,9 @@
-"""Compat shim: close leaked Feishu WebSocket connections on channel teardown.
+"""Feishu lifecycle compatibility for harness-gateway 0.9.7 / lark-oapi 1.7.3.
 
-harness-gateway 0.9.7 ``FeishuChannel._stop_ws_client()`` calls
-``lark_oapi.ws.Client.stop()`` — a method that does not exist in any released
-lark-oapi (only a private ``_disconnect()``). The ``AttributeError`` is
-swallowed by a broad ``except``, so every channel re-registration (settings
-save, connection probe) leaves the previous WebSocket thread and connection
-alive. lark's msg-frontier load-balances inbound events across all live
-connections of the same app, and the stale instances drop messages silently
-(``_running`` is already False) — users see "bot shows connected but never
-replies" that worsens with every settings save.
-
-This shim replaces ``FeishuChannel._run_ws_thread`` / ``_stop_ws_client`` at
-class level: the fixed teardown closes the socket on the client's own event
-loop (``_disconnect()``) and halts that loop so the select/ping daemon thread
-exits instead of leaking.
-
-Removal: delete this module (and its call in ``gateway.py``) once
-harness-gateway ships the fix; :func:`ensure_feishu_ws_stop_fix` also
-self-disables when ``lark_oapi.ws.Client`` gains a public ``stop()``.
-
-Scope: single-app connection leak only. The multi-app global-event-loop race
-tracked in TencentCloud/Octop#620 is a different defect, not addressed here.
+The SDK has no public stop(). Cancel its tasks before disconnecting so teardown
+cannot trigger auto-reconnect, and let the worker close its own event loop.
+Credential probes must not start another client on the SDK's global loop.
+Remove the teardown patch when harness-gateway provides this lifecycle handling.
 """
 
 from __future__ import annotations
@@ -30,95 +13,140 @@ import contextlib
 import logging
 from typing import Any
 
+from harness_gateway.channel import ChannelCredentialsError, MessageProcessor
+
 logger = logging.getLogger(__name__)
 
 _PATCH_MARKER = "_octop_feishu_ws_stop_fix"
-_WS_LOOP_ATTR = "_ws_loop"
-_JOIN_TIMEOUT_SECONDS = 5.0
+_STOP_TIMEOUT_SECONDS = 5.0
+
+
+async def probe_feishu_credentials(config: dict[str, Any], processor: MessageProcessor) -> None:
+    """Verify credentials without disturbing the running WebSocket client."""
+    from harness_gateway.channels.feishu import FeishuChannel, FeishuConfig
+
+    channel_config = FeishuConfig.from_dict(config)
+    missing = channel_config.missing_credentials()
+    if missing:
+        raise ChannelCredentialsError("feishu", missing)
+    channel = FeishuChannel(processor, config=channel_config)
+    try:
+        await channel._refresh_token()
+    finally:
+        await channel._close_http()
 
 
 def ensure_feishu_ws_stop_fix() -> bool:
-    """Apply the Feishu WS teardown fix once; return True when (newly) patched.
+    """Install the teardown patch once, unless the SDK provides stop()."""
+    import lark_oapi as lark
+    from harness_gateway.channels.feishu import FeishuChannel
 
-    No-op when harness-gateway / lark-oapi are unavailable, when the SDK
-    already exposes a public ``stop()`` (stock teardown works again), or when
-    the patch is already applied.
-    """
-    try:
-        import lark_oapi as lark
-        from harness_gateway.channels.feishu import FeishuChannel
-    except Exception:  # pragma: no cover - optional channel dependencies
-        return False
-
-    if getattr(FeishuChannel, _PATCH_MARKER, False):
-        return False
-    if hasattr(lark.ws.Client, "stop"):
+    if getattr(FeishuChannel, _PATCH_MARKER, False) or hasattr(lark.ws.Client, "stop"):
         return False
 
     FeishuChannel._run_ws_thread = _fixed_run_ws_thread  # type: ignore[method-assign]
     FeishuChannel._stop_ws_client = _fixed_stop_ws_client  # type: ignore[method-assign]
     setattr(FeishuChannel, _PATCH_MARKER, True)
-    logger.info("Applied Feishu WS teardown compat fix (harness-gateway connection leak)")
     return True
 
 
-def _fixed_run_ws_thread(self: Any) -> None:
-    """Stock thread body plus per-instance loop capture for teardown."""
-    import asyncio as _asyncio
+async def _run_ws_client(channel: Any) -> None:
+    from lark_oapi.ws.exception import ClientException
 
-    # Create a new event loop for this thread (lark-oapi needs it)
-    loop = _asyncio.new_event_loop()
-    _asyncio.set_event_loop(loop)
-    setattr(self, _WS_LOOP_ATTR, loop)
-    try:
-        import lark_oapi.ws.client as ws_client_module
+    client = channel._ws_client
+    receive = client._receive_message_loop
 
-        ws_client_module.loop = loop
-    except (ImportError, AttributeError):
-        pass
+    async def receive_messages() -> None:
+        channel._ws_receive_task = asyncio.current_task()
+        await receive()
+
+    client._receive_message_loop = receive_messages
     try:
-        if self._ws_client:
-            self._ws_client.start()
+        await client._connect()
+    except ClientException:
+        raise
     except Exception:
-        logger.exception("Feishu WebSocket thread failed")
+        await client._disconnect()
+        if not client._auto_reconnect:
+            raise
+        await client._reconnect()
+    await client._ping_loop()
+
+
+async def _close_ws_client(client: Any, receive_task: asyncio.Task[Any] | None) -> None:
+    if receive_task is not None:
+        receive_task.cancel()
+        await asyncio.gather(receive_task, return_exceptions=True)
+
+    connection = client._conn
+    try:
+        async with asyncio.timeout(_STOP_TIMEOUT_SECONDS):
+            await client._disconnect()
+    except Exception:
+        # A failed close handshake must not leave the socket alive after loop.close().
+        if connection is not None:
+            connection.transport.abort()
+        logger.warning("Feishu WebSocket disconnect failed", exc_info=True)
+    finally:
+        # Legacy transports need their reader/close tasks alive during the handshake.
+        tasks = asyncio.all_tasks() - {asyncio.current_task()}
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _fixed_run_ws_thread(self: Any) -> None:
+    import lark_oapi.ws.client as ws_client_module
+
+    client = self._ws_client
+    try:
+        with asyncio.Runner() as runner:
+            loop = runner.get_loop()
+            if client is None:
+                return
+            self._ws_receive_task = None
+            task = loop.create_task(_run_ws_client(self))
+            self._ws_task = task
+            self._ws_loop = loop
+            # stop() can run before the worker has published its loop.
+            if not self._running:
+                task.cancel()
+            else:
+                ws_client_module.loop = loop
+            try:
+                loop.run_until_complete(task)
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Feishu WebSocket thread failed")
+            finally:
+                client._auto_reconnect = False
+                runner.run(_close_ws_client(client, self._ws_receive_task))
+    finally:
+        self._ws_client = None
+        self._ws_loop = None
+        self._ws_task = None
+        self._ws_receive_task = None
+        self._ws_thread = None
+        self._ws_session_id = None
 
 
 async def _fixed_stop_ws_client(self: Any) -> None:
-    """Stop the WebSocket client for real; end its worker thread."""
+    self._running = False
     client = self._ws_client
-    loop = getattr(self, _WS_LOOP_ATTR, None)
-
-    used_fallback = False
     if client is not None:
-        stopped = False
-        if hasattr(client, "stop"):
-            # Public stop() if a newer SDK provides one — it owns its own
-            # loop/thread lifecycle.
-            try:
-                client.stop()
-                stopped = True
-            except Exception:
-                logger.debug("Error stopping Feishu WebSocket client", exc_info=True)
-        if not stopped and loop is not None and loop.is_running():
-            # lark-oapi has no public stop(): close the socket on the client's
-            # own loop so msg-frontier drops this device, then halt the loop to
-            # end the select/ping tasks and the daemon thread.
-            try:
-                fut = asyncio.run_coroutine_threadsafe(client._disconnect(), loop)
-                fut.result(timeout=_JOIN_TIMEOUT_SECONDS)
-                stopped = True
-                used_fallback = True
-                logger.info("Feishu WebSocket connection closed")
-            except Exception:
-                logger.debug("Feishu WS disconnect failed", exc_info=True)
-        self._ws_client = None
-    if used_fallback and loop is not None and loop.is_running():
-        with contextlib.suppress(RuntimeError):
-            loop.call_soon_threadsafe(loop.stop)
+        client._auto_reconnect = False
+    loop = getattr(self, "_ws_loop", None)
+    task = getattr(self, "_ws_task", None)
+    if loop is not None and task is not None:
+        with contextlib.suppress(RuntimeError):  # worker may already have closed the loop
+            loop.call_soon_threadsafe(task.cancel)
 
-    ws_thread = getattr(self, "_ws_thread", None)
-    if ws_thread is not None:
-        ws_thread.join(timeout=_JOIN_TIMEOUT_SECONDS)
-        self._ws_thread = None
-    self._ws_session_id = None
-    setattr(self, _WS_LOOP_ATTR, None)
+    thread = getattr(self, "_ws_thread", None)
+    if thread is not None:
+        await asyncio.get_running_loop().run_in_executor(
+            None, thread.join, _STOP_TIMEOUT_SECONDS + 1.0
+        )
+        if thread.is_alive():
+            # Keep references until the worker handles cancellation and finishes cleanup.
+            logger.warning("Feishu WebSocket worker is still stopping")
