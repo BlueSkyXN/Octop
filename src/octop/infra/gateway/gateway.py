@@ -20,6 +20,7 @@ from octop.infra.db.repos.channels import ChannelRow
 from octop.infra.db.repos.sessions import SessionRow
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.gateway.cli import CLI_CHANNEL_ID, CliChannel, CliHub
+from octop.infra.gateway.feishu_ws_compat import ensure_feishu_ws_stop_fix
 from octop.infra.gateway.history_backfill import HistoryBackfillQueue
 from octop.infra.gateway.process import media_backend_for_agent
 from octop.infra.gateway.process.processor import GlobalProcessor
@@ -217,6 +218,10 @@ class Gateway:
             trajectory_service=self._trajectory_service,
             history_archive=self._history_archive,
         )
+
+        # Close the lark WS teardown hole (harness-gateway 0.9.7 leak) before
+        # any IM channel instance is constructed — see feishu_ws_compat.
+        ensure_feishu_ws_stop_fix()
 
         self._channel_manager = ChannelManager(channels={})
         self._channel_manager.set_pre_lock_handler(self._preempt_cancel_on_stop)
