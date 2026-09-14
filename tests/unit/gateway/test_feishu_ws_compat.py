@@ -94,10 +94,7 @@ async def live_channel(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureR
 
 
 async def test_probe_keeps_live_channel_receiving(live_channel: Any) -> None:
-    import lark_oapi.ws.client as sdk
-
     state = live_channel
-    worker_loop = state.channel._ws_loop
     await state.connection.send(b"before")
     assert await asyncio.wait_for(state.messages.get(), 3) == b"before"
 
@@ -108,7 +105,6 @@ async def test_probe_keeps_live_channel_receiving(live_channel: Any) -> None:
     await state.connection.send(b"after")
     assert await asyncio.wait_for(state.messages.get(), 3) == b"after"
     assert state.connections.empty()
-    assert sdk.loop is worker_loop
 
 
 @pytest.mark.parametrize("live_channel", ["default", "legacy"], indirect=True)

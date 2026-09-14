@@ -1,9 +1,9 @@
-"""Feishu lifecycle compatibility for harness-gateway 0.9.7 / lark-oapi 1.7.3.
+"""Close Feishu connections when channels are stopped or replaced.
 
-The SDK has no public stop(). Cancel its tasks before disconnecting so teardown
-cannot trigger auto-reconnect, and let the worker close its own event loop.
-Credential probes must not start another client on the SDK's global loop.
-Remove the teardown patch when harness-gateway provides this lifecycle handling.
+harness-gateway 0.9.7 calls stop(), which lark-oapi 1.7.3 does not provide.
+Cancel the SDK receiver, close the socket, then release worker tasks and its loop.
+Credential probes validate the token without opening another event receiver.
+Remove the teardown patch when harness-gateway handles this lifecycle itself.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ _STOP_TIMEOUT_SECONDS = 5.0
 
 
 async def probe_feishu_credentials(config: dict[str, Any], processor: MessageProcessor) -> None:
-    """Verify credentials without disturbing the running WebSocket client."""
+    """Reuse token validation without registering a WebSocket event receiver."""
     from harness_gateway.channels.feishu import FeishuChannel, FeishuConfig
 
     channel_config = FeishuConfig.from_dict(config)
