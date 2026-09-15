@@ -1,10 +1,13 @@
 name: Fork Image (GHCR + TCR)
 
-# Fork-private image build, dual-pushed to:
-#   - ghcr.io/blueskyxn/octop                  (public archive)
-#   - ccr.ccs.tencentyun.com/xn-cn-gz/octop     (Tencent TCR personal, Guangzhou —
-#     the registry the production server pulls from; first push is a ~2GB
-#     cross-border upload, re-runs only upload missing layers)
+# Fork-private image build, pushed to:
+#   - ghcr.io/blueskyxn/octop                      (public archive)
+#   - uswccr.ccs.tencentyun.com/us-sv/octop        (Tencent TCR personal,
+#     Silicon Valley — same country as the runner, so the 2GB first push is
+#     fast; US runners CANNOT push bytes into the Guangzhou endpoint:
+#     verified 2026-09-15, 30 min at 0 bytes while logins/GETs work)
+# The production server then relays us-sv -> xn-cn-gz (Guangzhou) over the
+# Tencent internal network and pulls from xn-cn-gz.
 # Lives ONLY on the fork/image branch — never part of upstream PRs.
 # Differs from upstream docker-publish.yml: no Docker Hub login/secrets,
 # one version tag only (e.g. 1.0.0.2). Compose pins that tag.
@@ -62,10 +65,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to TCR (Guangzhou)
+      - name: Log in to TCR (us-sv)
         uses: docker/login-action@v3
         with:
-          registry: ccr.ccs.tencentyun.com
+          registry: uswccr.ccs.tencentyun.com
           username: ${{ secrets.TCR_USERNAME }}
           password: ${{ secrets.TCR_PASSWORD }}
 
@@ -80,18 +83,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # TCR gets its own step: the US runner -> Guangzhou first push (~2GB,
-      # cross-border) can stall, and an isolated step turns a stall into a
-      # re-runnable failure ("Re-run failed jobs" resumes it). TCR dedupes
-      # blobs by digest, so every retry uploads only what is still missing
-      # and retries converge. The rebuild itself hits the GHA layer cache.
-      - name: Push (TCR Guangzhou)
+      # TCR gets its own step so a registry problem never redoes the build.
+      # Target is us-sv (Silicon Valley): same country as the runner. Do NOT
+      # point this at the Guangzhou endpoint — US runners hang on its blob
+      # uploads (0 bytes in 30 min, 2026-09-15). The server relays us-sv to
+      # xn-cn-gz over the Tencent internal network.
+      - name: Push (TCR us-sv)
         uses: docker/build-push-action@v6
-        timeout-minutes: 30
+        timeout-minutes: 20
         with:
           context: .
           file: ./docker/Dockerfile
           push: true
           platforms: linux/amd64
-          tags: ccr.ccs.tencentyun.com/xn-cn-gz/octop:${{ steps.ver.outputs.version }}
+          tags: uswccr.ccs.tencentyun.com/us-sv/octop:${{ steps.ver.outputs.version }}
           cache-from: type=gha
