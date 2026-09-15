@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 from typing import Any
 
@@ -206,6 +207,83 @@ async def test_stubborn_generator_teardown_is_honest(
         t.cancel()
     await asyncio.gather(*leftover, return_exceptions=True)
     await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_contextvar_scope_survives_across_steps() -> None:
+    """Harness streams wrap their whole body in a ContextVar scope (session_header_scope).
+
+    Stepping each __anext__ in a fresh task context resets that token in a
+    different Context → ValueError → the finished turn is reported failed."""
+    var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+        "t_session_scope", default=None
+    )
+    seen: list[str | None] = []
+
+    async def gen():
+        token = var.set("th1")
+        try:
+            seen.append(var.get())
+            yield _msg("a")
+            seen.append(var.get())
+            yield _msg("b")
+        finally:
+            var.reset(token)
+
+    events, outcome, _ = await _collect(gen())
+    texts = _texts(events)
+    assert [t for t in texts if t.startswith("message:")] == ["message:a", "message:b"]
+    assert seen == ["th1", "th1"]
+    assert outcome.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_timeout_teardown_resets_stream_contextvar_cleanly(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="octop.infra.gateway.process.turn_budget")
+    var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+        "t_session_scope_timeout", default=None
+    )
+    cancel_event = asyncio.Event()
+
+    async def gen():
+        token = var.set("th1")
+        try:
+            yield _msg("ack")
+            sleep_t = asyncio.ensure_future(asyncio.sleep(30))
+            cancel_t = asyncio.ensure_future(cancel_event.wait())
+            done, pend = await asyncio.wait(
+                {sleep_t, cancel_t}, timeout=31, return_when=asyncio.FIRST_COMPLETED
+            )
+            for p in pend:
+                p.cancel()
+            if cancel_t in done:
+                return
+            yield _msg("never")
+        finally:
+            var.reset(token)
+
+    outcome = TurnBudgetOutcome()
+    events: list[Any] = []
+    async for ev in consume_turn_stream(
+        gen(),
+        spec=_spec(0.3, 0.1),
+        agent_id="ag1",
+        thread_id="th1",
+        locale="zh",
+        cancel=cancel_event.set,
+        outcome=outcome,
+    ):
+        events.append(ev)
+    texts = _texts(events)
+    assert "message:ack" in texts
+    assert any(t.startswith("error:") for t in texts), texts
+    assert outcome.timed_out is True
+    assert cancel_event.is_set()
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == [], (
+        "context reset must stay in the stream's shared context"
+    )
 
 
 def _msg(text: str) -> Any:

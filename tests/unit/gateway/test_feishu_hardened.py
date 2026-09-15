@@ -305,3 +305,18 @@ async def test_typing_reaction_removed_after_turn(monkeypatch: pytest.MonkeyPatc
         await ch.handle_inbound({"message_id": "om_r4"})
     assert removed == ["om_r4"]  # finally semantics: removed even on failure
     assert "om_r4" not in ch._typing_reactions
+
+
+def test_bot_open_id_parses_real_api_shape() -> None:
+    """The real /bot/v3/info payload puts open_id under the top-level bot key."""
+    from octop.infra.gateway.feishu_compat import _open_id_from_bot_info
+
+    real_shape = {
+        "code": 0,
+        "msg": "ok",
+        "bot": {"activate_status": 2, "app_name": "x", "open_id": "ou_23947f3f"},
+    }
+    assert _open_id_from_bot_info(real_shape) == "ou_23947f3f"
+    assert _open_id_from_bot_info({"code": 0, "data": {"open_id": "ou_a"}}) == "ou_a"
+    assert _open_id_from_bot_info({"code": 1901, "bot": {"open_id": "ou_x"}}) == ""
+    assert _open_id_from_bot_info({"code": 0, "bot": {}}) == ""
