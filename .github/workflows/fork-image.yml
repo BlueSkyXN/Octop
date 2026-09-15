@@ -5,12 +5,14 @@ name: Fork Image (GHCR only)
 # Differs from upstream docker-publish.yml: no Docker Hub login/secrets,
 # version tag only (plus a floating :feishu alias for server compose).
 #
-# Trigger: push a v* tag placed on a fork/image commit:
-#   git tag v1.0.0-feishu.1 && git push origin v1.0.0-feishu.1
+# Trigger: push an img-v* tag placed on a fork/image commit. The img- prefix
+# keeps upstream's v*-triggered workflows (Release / Docker Publish / Desktop)
+# out of the way — they fire only on tags starting with "v".
+#   git tag img-v1.0.0-feishu.2 && git push origin img-v1.0.0-feishu.2
 on:
   push:
     tags:
-      - "v*"
+      - "img-v*"
 
 permissions:
   contents: read
@@ -32,11 +34,11 @@ jobs:
           set -euo pipefail
           ref="${GITHUB_REF_NAME}"
           case "$ref" in
-            v*)
-              echo "version=${ref#v}" >> "$GITHUB_OUTPUT"
+            img-v*)
+              echo "version=${ref#img-v}" >> "$GITHUB_OUTPUT"
               ;;
             *)
-              echo "::error::Expected refs/tags/v*, got ref_name=$ref"
+              echo "::error::Expected refs/tags/img-v*, got ref_name=$ref"
               exit 1
               ;;
           esac
