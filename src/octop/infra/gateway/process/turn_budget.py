@@ -6,6 +6,9 @@ Feishu group turns that carry ``metadata["turn_budget"]`` are consumed through
 * yields localized progress notes while the agent keeps working,
 * cancels the harness stream and reaps turn execute process groups at the
   deadline (bounded drain collects whatever the stream flushes after cancel),
+* steps the stream in one shared ``contextvars`` context — per-task context
+  copies would reset harness ContextVar scopes (``session_header_scope``) in a
+  different Context and fail the turn,
 * tears the generator down in the verified order: cancel pending ``__anext__``
   task → wait (bounded) for it to exit and retrieve its result/exception →
   only then ``aclose()`` (calling ``aclose`` while ``__anext__`` is still
@@ -22,6 +25,7 @@ the processor — behavior unchanged.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
@@ -116,6 +120,11 @@ async def consume_turn_stream(
     """Drive *stream* under a turn budget; yield progress/error plus its events."""
     ctx = claim_turn_exec_context(agent_id=agent_id, thread_id=thread_id, timeout_s=spec.timeout_s)
     token = set_current_turn_exec_context(ctx)
+    # Every __anext__/aclose must run in this one context: harness streams bind
+    # ContextVars (session_header_scope) around their whole body, and resetting
+    # that token from a different task context raises ValueError.
+    stream_ctx = contextvars.copy_context()
+    loop = asyncio.get_running_loop()
     it = stream.__aiter__()
     next_task: asyncio.Task[MessageEvent] | None = None
     progress_at = time.monotonic() + spec.progress_interval_s
@@ -133,7 +142,7 @@ async def consume_turn_stream(
                     if next_task is None:
                         if time.monotonic() >= drain_end:
                             break
-                        next_task = asyncio.ensure_future(it.__anext__())
+                        next_task = loop.create_task(_astep(it), context=stream_ctx)
                     wait_s = max(_MIN_WAIT_SECONDS, drain_end - time.monotonic())
                     done, _ = await asyncio.wait({next_task}, timeout=wait_s)
                     if not done:
@@ -154,7 +163,7 @@ async def consume_turn_stream(
                 yield _progress_event(locale, elapsed_s=spec.timeout_s - (ctx.deadline - now))
                 progress_at = now + spec.progress_interval_s
             if next_task is None:
-                next_task = asyncio.ensure_future(it.__anext__())
+                next_task = loop.create_task(_astep(it), context=stream_ctx)
             wait_s = max(_MIN_WAIT_SECONDS, min(ctx.deadline, progress_at) - time.monotonic())
             done, _ = await asyncio.wait({next_task}, timeout=wait_s)
             if not done:
@@ -166,9 +175,14 @@ async def consume_turn_stream(
             next_task = None
             yield event
     finally:
-        await _teardown(it, next_task, ctx)
+        await _teardown(it, next_task, ctx, stream_ctx)
         reset_current_turn_exec_context(token)
         release_turn_exec_context(ctx)
+
+
+async def _astep(it: AsyncIterator[MessageEvent]) -> MessageEvent:
+    """Step the stream once as a coroutine so ``create_task`` can pin the context."""
+    return await it.__anext__()
 
 
 async def _call_cancel(cancel: Callable[[], Any], *, agent_id: str, thread_id: str) -> None:
@@ -191,6 +205,7 @@ async def _teardown(
     it: AsyncIterator[MessageEvent],
     next_task: asyncio.Task[MessageEvent] | None,
     ctx: TurnExecContext,
+    stream_ctx: contextvars.Context,
 ) -> None:
     """Cancel pending task → bounded wait for exit → aclose → kill processes."""
     if next_task is not None:
@@ -209,7 +224,7 @@ async def _teardown(
                 "turn stream task did not exit within %.0fs after cancel",
                 _TEARDOWN_WAIT_SECONDS,
             )
-    close_task = asyncio.ensure_future(_aclose_iterator(it))
+    close_task = asyncio.get_running_loop().create_task(_aclose_iterator(it), context=stream_ctx)
     close_done, close_pending = await asyncio.wait({close_task}, timeout=_TEARDOWN_WAIT_SECONDS)
     if close_pending:
         logger.warning("turn stream generator did not close cleanly")
