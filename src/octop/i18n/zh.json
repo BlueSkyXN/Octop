@@ -706,5 +706,9 @@
       "UnauthorizedOperation": "当前腾讯云账号没有该语音接口的访问权限。",
       "RequestLimitExceeded": "腾讯云请求过于频繁，请稍后再试。"
     }
+  },
+  "feishu": {
+    "turn_timeout": "本轮处理超过 {minutes} 分钟预算，已停止本轮回复。请稍后重试，或把任务拆分成更小的步骤。",
+    "progress_running": "仍在处理中…（本轮已运行约 {minutes} 分钟）。"
   }
 }

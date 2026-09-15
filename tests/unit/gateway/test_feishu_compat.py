@@ -12,7 +12,7 @@ import pytest
 from harness_gateway.channels import feishu
 from websockets.asyncio.server import serve
 
-from octop.infra.gateway import feishu_ws_compat as compat
+from octop.infra.gateway import feishu_compat as compat
 from octop.infra.gateway.gateway import _probe_processor
 
 

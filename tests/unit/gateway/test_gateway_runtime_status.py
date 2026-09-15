@@ -54,7 +54,12 @@ async def test_register_success_sets_runtime_connected(tmp_path: Path) -> None:
     assert status.connected is True
     assert status.reason is None
     assert gw._channel_manager.add_channel.await_args is not None
-    assert gw._channel_manager.add_channel.await_args.kwargs["processor"] is not gw._processor
+    channel = gw._channel_manager.add_channel.await_args.args[0]
+    assert type(channel).__name__ == "FeishuHardenedChannel"
+    assert channel.channel_id == "ch1"
+    assert channel.tenant_id == "agent1"
+    # Default response mode is invoke: the channel carries the wrapped processor.
+    assert channel._processor is not gw._processor
 
 
 @pytest.mark.asyncio
@@ -70,7 +75,9 @@ async def test_register_stream_mode_uses_original_processor(tmp_path: Path) -> N
     await gw._register_channel(row)
 
     assert gw._channel_manager.add_channel.await_args is not None
-    assert gw._channel_manager.add_channel.await_args.kwargs["processor"] is gw._processor
+    channel = gw._channel_manager.add_channel.await_args.args[0]
+    # Stream mode passes the processor through unwrapped.
+    assert channel._processor is gw._processor
 
 
 @pytest.mark.asyncio
@@ -154,7 +161,9 @@ async def test_reload_channels_from_db_unregisters_old_and_registers_enabled(
     remove_channel.assert_awaited_once_with("old-ch")
     add_channel.assert_awaited_once()
     assert add_channel.await_args is not None
-    assert add_channel.await_args.kwargs["channel_id"] == "new-ch"
+    channel = add_channel.await_args.args[0]
+    assert type(channel).__name__ == "FeishuHardenedChannel"
+    assert channel.channel_id == "new-ch"
     assert gw.get_runtime_status("old-ch") is None
     assert gw.get_runtime_status("stale-status") is None
     status = gw.get_runtime_status("new-ch")

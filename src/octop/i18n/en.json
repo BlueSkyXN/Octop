@@ -706,5 +706,9 @@
       "UnauthorizedOperation": "This Tencent Cloud account is not authorized for this voice API.",
       "RequestLimitExceeded": "Tencent Cloud rate-limited this request. Retry in a moment."
     }
+  },
+  "feishu": {
+    "turn_timeout": "This turn exceeded its {minutes}-minute budget and was stopped. Please retry, or split the task into smaller steps.",
+    "progress_running": "Still working on it… (~{minutes} min elapsed this turn)."
   }
 }

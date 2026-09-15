@@ -64,6 +64,11 @@ async def collapse_to_invoke_response(
             continue
 
         if event.type == MessageEventType.MESSAGE:
+            if event.metadata.get("progress"):
+                # Turn-budget progress notes (turn_budget.py) are delivered
+                # immediately, before any narration collapse can discard them.
+                yield event
+                continue
             for part in event.content:
                 if isinstance(part, TextContent):
                     text = part.text.strip()

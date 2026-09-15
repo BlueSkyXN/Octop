@@ -21,7 +21,7 @@ from harness_gateway.channels.weixin.types import WeixinAPIError
 from harness_gateway.manager import ChannelManager
 from tests.support.secrets import optional_env, require_env
 
-from octop.infra.gateway.feishu_ws_compat import probe_feishu_credentials
+from octop.infra.gateway.feishu_compat import probe_feishu_credentials
 from octop.infra.gateway.gateway import _probe_processor
 
 pytestmark = pytest.mark.live

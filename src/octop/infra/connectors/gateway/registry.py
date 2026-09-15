@@ -20,11 +20,16 @@ from octop.infra.connectors.gateway.adapters import (
     yuandian,
 )
 
+# Tool output: plain text, or multimodal blocks (text + image_url, …).
+GatewayToolResult = str | list[dict[str, Any]]
+
 
 class GatewayAdapter(Protocol):
     def list_tools(self) -> list[dict[str, Any]]: ...
 
-    def call_tool(self, creds: dict[str, Any], name: str, args: dict[str, Any]) -> str: ...
+    def call_tool(
+        self, creds: dict[str, Any], name: str, args: dict[str, Any]
+    ) -> GatewayToolResult: ...
 
     def probe_credentials(self, creds: dict[str, Any]) -> None: ...
 
@@ -62,7 +67,7 @@ def call_gateway_tool(
     creds: dict[str, Any],
     name: str,
     args: dict[str, Any],
-) -> str:
+) -> GatewayToolResult:
     adapter = get_gateway_adapter(kind)
     if adapter is None:
         raise ValueError(f"unknown tool: {name}")

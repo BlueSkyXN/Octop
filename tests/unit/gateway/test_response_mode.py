@@ -125,3 +125,29 @@ def test_qq_channel_streams_by_default() -> None:
     assert qq_channel_response_mode({"c2c_streaming": True}) == "stream"
     assert qq_channel_response_mode({"c2c_streaming": False}) == "invoke"
     assert qq_channel_response_mode({"c2c_streaming": "false"}) == "invoke"
+
+
+@pytest.mark.asyncio
+async def test_invoke_passes_turn_budget_progress_through_immediately() -> None:
+    """Turn-budget progress notes bypass the collapse buffer entirely."""
+    progress = MessageEvent(
+        type=MessageEventType.MESSAGE,
+        content=[TextContent(text="仍在处理中…")],
+        metadata={"progress": True},
+    )
+    source = _events(
+        progress,
+        MessageEvent.delta("答案正文"),
+        MessageEvent.completed(),
+    )
+
+    out = [event async for event in collapse_to_invoke_response(source)]
+
+    # Progress first and untouched; final text still collapsed at the end.
+    assert out[0].metadata.get("progress") is True
+    assert out[0].content[0].text == "仍在处理中…"
+    finals = [
+        e for e in out if e.type == MessageEventType.MESSAGE and not e.metadata.get("progress")
+    ]
+    assert len(finals) == 1
+    assert finals[0].content[0].text == "答案正文"

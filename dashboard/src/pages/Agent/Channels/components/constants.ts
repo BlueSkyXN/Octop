@@ -258,6 +258,22 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
       label: "Verification Token",
       type: "password",
     },
+    {
+      name: "turn_timeout_seconds",
+      label: "回复预算（秒）",
+      placeholder: "600",
+    },
+    {
+      name: "progress_interval_seconds",
+      label: "进度提示间隔（秒）",
+      placeholder: "120",
+    },
+    {
+      name: "group_context",
+      label: "群聊策略（JSON）",
+      type: "json",
+      placeholder: '{"enabled": true, "activation": "mention"}',
+    },
   ],
   dingtalk: [
     {

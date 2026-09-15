@@ -55,6 +55,11 @@ from octop.infra.gateway.process.stream_project import (
     enrich_tool_stream_chunk,
     project_stream,
 )
+from octop.infra.gateway.process.turn_budget import (
+    TurnBudgetOutcome,
+    consume_turn_stream,
+    turn_budget_from_metadata,
+)
 from octop.infra.gateway.process.usage_record import UsageTracker, record_turn_usage
 from octop.infra.gateway.slash.ctx import SlashCtx, build_slash_ctx
 from octop.infra.gateway.slash.parser import parse_slash
@@ -862,8 +867,10 @@ class GlobalProcessor:
         usage_tracker = UsageTracker()
         history_tracker = await self._begin_history(agent_id, thread_id, request)
         projection_state = StreamProjectionState()
+        budget_spec = turn_budget_from_metadata(msg.metadata)
+        budget_outcome = TurnBudgetOutcome()
         try:
-            async for ev in project_stream(
+            stream: AsyncIterator[MessageEvent] = project_stream(
                 self._agent_manager,
                 agent_id,
                 request,
@@ -880,9 +887,22 @@ class GlobalProcessor:
                     session_key=session_key,
                     channel_type=channel_type,
                 ),
-            ):
-                yield ev
-            stream_ok = True
+            )
+            if budget_spec is None:
+                async for ev in stream:
+                    yield ev
+            else:
+                async for ev in consume_turn_stream(
+                    stream,
+                    spec=budget_spec,
+                    agent_id=agent_id,
+                    thread_id=thread_id,
+                    locale=locale,
+                    cancel=lambda: self._agent_manager.cancel_stream(agent_id, thread_id),
+                    outcome=budget_outcome,
+                ):
+                    yield ev
+            stream_ok = not budget_outcome.timed_out
             hitl_paused = projection_state.hitl_paused
         except Exception as exc:
             await self._record_stream_error(user_id=user_id, agent_id=agent_id, exc=exc)

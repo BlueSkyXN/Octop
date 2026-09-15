@@ -16,11 +16,18 @@ from harness_gateway.manager import ChannelManager
 from harness_gateway.models import ChannelSubject
 
 from octop.i18n import channel_probe_incomplete, channel_runtime_reason, tr
+from octop.infra.agents.execute_guard import (
+    ensure_execute_process_guard,
+    kill_turn_processes,
+)
 from octop.infra.db.repos.channels import ChannelRow
 from octop.infra.db.repos.sessions import SessionRow
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.gateway.cli import CLI_CHANNEL_ID, CliChannel, CliHub
-from octop.infra.gateway.feishu_ws_compat import (
+from octop.infra.gateway.feishu_compat import (
+    DEFAULT_PROGRESS_INTERVAL_SECONDS,
+    DEFAULT_TURN_TIMEOUT_SECONDS,
+    build_feishu_hardened_channel,
     ensure_feishu_ws_stop_fix,
     probe_feishu_credentials,
 )
@@ -92,6 +99,28 @@ async def _probe_processor(_msg: Any) -> Any:
     """Stub processor for ephemeral channel probe instances."""
     if False:  # pragma: no cover - makes this an async generator
         yield None
+
+
+def _feishu_turn_timeout_seconds(config: dict[str, Any]) -> float:
+    """Parse ``turn_timeout_seconds`` from the raw Feishu channel config."""
+    try:
+        value = float(config.get("turn_timeout_seconds", 0) or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value <= 0:
+        return DEFAULT_TURN_TIMEOUT_SECONDS
+    return min(max(value, 60.0), 3600.0)
+
+
+def _feishu_progress_interval_seconds(config: dict[str, Any]) -> float:
+    """Parse ``progress_interval_seconds`` from the raw Feishu channel config."""
+    try:
+        value = float(config.get("progress_interval_seconds", 0) or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value <= 0:
+        return DEFAULT_PROGRESS_INTERVAL_SECONDS
+    return min(max(value, 30.0), 600.0)
 
 
 class Gateway:
@@ -223,6 +252,7 @@ class Gateway:
         )
 
         ensure_feishu_ws_stop_fix()
+        ensure_execute_process_guard()
 
         self._channel_manager = ChannelManager(channels={})
         self._channel_manager.set_pre_lock_handler(self._preempt_cancel_on_stop)
@@ -517,7 +547,14 @@ class Gateway:
         if not thread_id:
             return
 
-        self._agent_manager.cancel_stream(agent_id.strip(), thread_id)
+        agent_id = agent_id.strip()
+        self._agent_manager.cancel_stream(agent_id, thread_id)
+        # Budgeted turns (Feishu hardening) also reap live execute process
+        # groups; non-budgeted turns have no registry and this is a no-op.
+        asyncio.create_task(
+            asyncio.to_thread(kill_turn_processes, agent_id, thread_id),
+            name="turn-exec-kill",
+        )
         logger.info(
             "preempt cancel: agent=%s thread=%s cmd=/%s",
             agent_id,
@@ -649,19 +686,48 @@ class Gateway:
         )
         processor = processor_for_response_mode(self._processor, response_mode)
         manager = self._require_channel_manager()
-        await manager.add_channel(
-            row.kind,
-            config,
-            tenant_id=row.agent_id,
-            channel_id=row.channel_id,
-            processor=processor,
-        )
+        if row.kind == "feishu":
+            await self._register_feishu_channel(row, config, processor, manager)
+        else:
+            await manager.add_channel(
+                row.kind,
+                config,
+                tenant_id=row.agent_id,
+                channel_id=row.channel_id,
+                processor=processor,
+            )
         registered = manager.get_channel(row.channel_id)
         if registered is not None:
             backend = media_backend_for_agent(self._agent_manager, row.agent_id)
             if backend is not None:
                 registered.set_media_backend(backend)
         self._set_runtime_status(row.channel_id, connected=True)
+
+    async def _register_feishu_channel(
+        self,
+        row: ChannelRow,
+        config: dict[str, Any],
+        processor: Any,
+        manager: ChannelManager,
+    ) -> None:
+        """Register the hardened Feishu channel instance.
+
+        ``add_channel`` applies channel_id/tenant/processor kwargs only on the
+        string-kind path, so an instance must carry them explicitly. Extra
+        hardening keys are parsed here because ``FeishuConfig.from_dict``
+        drops undeclared fields.
+        """
+        from harness_gateway.channels.feishu import FeishuConfig
+
+        channel = build_feishu_hardened_channel(
+            processor,
+            FeishuConfig.from_dict(config),
+            channel_id=row.channel_id,
+            tenant_id=row.agent_id,
+            turn_timeout_s=_feishu_turn_timeout_seconds(config),
+            progress_interval_s=_feishu_progress_interval_seconds(config),
+        )
+        await manager.add_channel(channel)
 
     def _config_from_row(self, row: ChannelRow) -> dict[str, Any]:
         """Parse the stored JSON config; alias/normalize happens in ``Config.from_dict``."""
