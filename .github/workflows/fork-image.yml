@@ -69,15 +69,29 @@ jobs:
           username: ${{ secrets.TCR_USERNAME }}
           password: ${{ secrets.TCR_PASSWORD }}
 
-      - name: Build and push
+      - name: Build and push (GHCR)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./docker/Dockerfile
           push: true
           platforms: linux/amd64
-          tags: |
-            ${{ steps.image.outputs.name }}:${{ steps.ver.outputs.version }}
-            ccr.ccs.tencentyun.com/xn-cn-gz/octop:${{ steps.ver.outputs.version }}
+          tags: ${{ steps.image.outputs.name }}:${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # TCR gets its own step: the US runner -> Guangzhou first push (~2GB,
+      # cross-border) can stall, and an isolated step turns a stall into a
+      # re-runnable failure ("Re-run failed jobs" resumes it). TCR dedupes
+      # blobs by digest, so every retry uploads only what is still missing
+      # and retries converge. The rebuild itself hits the GHA layer cache.
+      - name: Push (TCR Guangzhou)
+        uses: docker/build-push-action@v6
+        timeout-minutes: 30
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ccr.ccs.tencentyun.com/xn-cn-gz/octop:${{ steps.ver.outputs.version }}
+          cache-from: type=gha
