@@ -3,7 +3,7 @@ name: Fork Image (GHCR only)
 # Fork-private image build for ghcr.io/blueskyxn/octop.
 # Lives ONLY on the fork/image branch — never part of upstream PRs.
 # Differs from upstream docker-publish.yml: no Docker Hub login/secrets,
-# version tag only (plus a floating :feishu alias for server compose).
+# one version tag only (e.g. 1.0.0.1). Compose pins that tag.
 #
 # Trigger: push an img-v* tag placed on a fork/image commit. The img- prefix
 # keeps upstream's v*-triggered workflows (Release / Docker Publish / Desktop)
@@ -66,6 +66,5 @@ jobs:
           platforms: linux/amd64
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.ver.outputs.version }}
-            ${{ steps.image.outputs.name }}:feishu
           cache-from: type=gha
           cache-to: type=gha,mode=max
