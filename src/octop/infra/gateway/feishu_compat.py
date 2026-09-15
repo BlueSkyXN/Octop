@@ -40,6 +40,20 @@ _REACTION_ACK_TIMEOUT_SECONDS = 3.0
 _ALL_MENTION_OPEN_ID = "all"
 
 
+def _open_id_from_bot_info(data: Any) -> str:
+    """Extract the bot's open_id from a ``GET /bot/v3/info`` payload.
+
+    The API puts the payload under the top-level ``bot`` key (no ``data``
+    wrapper); ``data`` is accepted as a defensive fallback.
+    """
+    if not isinstance(data, dict) or data.get("code") != 0:
+        return ""
+    info = data.get("bot") or data.get("data") or {}
+    if not isinstance(info, dict):
+        return ""
+    return str(info.get("open_id") or "")
+
+
 async def probe_feishu_credentials(config: dict[str, Any], processor: MessageProcessor) -> None:
     """Reuse token validation without registering a WebSocket event receiver."""
     from harness_gateway.channels.feishu import FeishuChannel, FeishuConfig
@@ -301,12 +315,11 @@ def _build_feishu_hardened_channel() -> type[Any]:
                     headers = await self._get_auth_headers()
                     async with http.get(f"{_API_BASE}/bot/v3/info", headers=headers) as resp:
                         data = await resp.json()
-                    if data.get("code") == 0:
-                        open_id = str((data.get("data") or {}).get("open_id") or "")
-                        if open_id:
-                            self._bot_open_id = open_id
-                            logger.info("Feishu bot identity ready (open_id=%s…)", open_id[:8])
-                            return
+                    open_id = _open_id_from_bot_info(data)
+                    if open_id:
+                        self._bot_open_id = open_id
+                        logger.info("Feishu bot identity ready (open_id=%s…)", open_id[:8])
+                        return
                     logger.warning("Feishu bot info response unusable: code=%s", data.get("code"))
                 except Exception:
                     logger.warning("Feishu bot identity fetch failed; retrying", exc_info=True)
