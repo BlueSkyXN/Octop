@@ -1,0 +1,69 @@
+name: Fork Image (GHCR only)
+
+# Fork-private image build for ghcr.io/blueskyxn/octop.
+# Lives ONLY on the fork/image branch — never part of upstream PRs.
+# Differs from upstream docker-publish.yml: no Docker Hub login/secrets,
+# version tag only (plus a floating :feishu alias for server compose).
+#
+# Trigger: push a v* tag placed on a fork/image commit:
+#   git tag v1.0.0-feishu.1 && git push origin v1.0.0-feishu.1
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    name: Build and push image (GHCR)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version from tag ref
+        id: ver
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF_NAME}"
+          case "$ref" in
+            v*)
+              echo "version=${ref#v}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Expected refs/tags/v*, got ref_name=$ref"
+              exit 1
+              ;;
+          esac
+
+      - name: Image name (GHCR requires lowercase)
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ steps.ver.outputs.version }}
+            ${{ steps.image.outputs.name }}:feishu
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
