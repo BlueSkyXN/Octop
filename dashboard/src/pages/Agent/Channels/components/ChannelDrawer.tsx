@@ -78,6 +78,7 @@ export interface ChannelFormValues {
   response_mode?: "invoke" | "stream";
   show_thinking?: boolean;
   show_tool_hints?: boolean;
+  stream_card?: boolean;
   group_context?: QqGroupContextConfig;
   [k: string]: string | boolean | QqGroupContextConfig | undefined;
   __raw_config?: string;
@@ -465,6 +466,16 @@ function DisplaySettingsFields() {
       >
         <Switch disabled={disableStreamToggles} />
       </Form.Item>
+      {kind === "feishu" && (
+        <Form.Item
+          name="stream_card"
+          label={t("channels.streamCard")}
+          tooltip={t("channels.streamCardDesc")}
+          valuePropName="checked"
+        >
+          <Switch />
+        </Form.Item>
+      )}
     </div>
   );
 }

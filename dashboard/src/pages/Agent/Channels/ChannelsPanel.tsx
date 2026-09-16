@@ -183,6 +183,9 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
           ) {
             continue;
           }
+          // Boolean switch, not a text credential — set explicitly below so
+          // it never round-trips through String(v).
+          if (k === "stream_card") continue;
           if (row.kind === "qq" && k === "group_context") {
             formCfg[k] = normalizeQqGroupContextConfig(v);
           } else if (typeof v === "string") formCfg[k] = v;
@@ -212,6 +215,8 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
             typeof cfg.show_tool_hints === "boolean"
               ? cfg.show_tool_hints
               : DEFAULT_CHANNEL_DISPLAY_CONFIG.show_tool_hints,
+          stream_card:
+            row.kind === "feishu" ? cfg.stream_card === true : undefined,
           ...formCfg,
           __raw_config: JSON.stringify(cfg, null, 2),
         };
