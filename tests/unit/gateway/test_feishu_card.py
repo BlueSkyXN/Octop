@@ -84,7 +84,30 @@ class FakeResponse:
     async def json(self, content_type: str | None = None) -> dict[str, Any]:
         return self._payload
 
+    async def text(self) -> str:
+        return json.dumps(self._payload)
+
     async def __aenter__(self) -> FakeResponse:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+class RawTextResponse:
+    """Simulates CardKit endpoints answering a non-JSON body."""
+
+    def __init__(self, body: str, status: int = 200) -> None:
+        self._body = body
+        self.status = status
+
+    async def json(self, content_type: str | None = None) -> dict[str, Any]:
+        raise ValueError("non-JSON")
+
+    async def text(self) -> str:
+        return self._body
+
+    async def __aenter__(self) -> RawTextResponse:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -141,6 +164,42 @@ async def test_client_raises_on_api_error() -> None:
     client = _client(http)
     with pytest.raises(feishu_card.CardKitError):
         await client.create_card({"schema": "2.0"})
+
+
+async def test_client_wraps_non_json_body_as_cardkit_error() -> None:
+    http = FakeHttp()
+    raw = RawTextResponse("true{}")
+
+    def raw_response(method: str, url: str, **kwargs: Any) -> RawTextResponse:
+        return raw
+
+    http.request = raw_response  # type: ignore[method-assign]
+    client = _client(http)
+    with pytest.raises(feishu_card.CardKitError, match="non-JSON"):
+        await client.create_card({"schema": "2.0"})
+
+
+async def test_session_close_is_idempotent_and_not_upgraded_to_error() -> None:
+    class FailingCloseClient(FakeCardKitClient):
+        async def close_card(self, card_id: str, sequence: int, summary: str) -> None:
+            raise feishu_card.CardKitError("settings returned non-JSON")
+
+    client = FailingCloseClient()
+    session, _ = _session(client)
+    await session.start()
+    session.state.final_text = "回复内容"
+
+    # close(DONE): final update lands; the settings failure is cosmetic and
+    # must neither raise nor drop the delivered text.
+    fallback = await session.close(feishu_card.TERMINAL_DONE)
+    assert fallback == []
+    assert session.state.terminal == feishu_card.TERMINAL_DONE
+
+    # A second close from an exception handler must not flip it to ERROR.
+    fallback = await session.close(feishu_card.TERMINAL_ERROR, error_text="boom")
+    assert fallback == []
+    assert session.state.terminal == feishu_card.TERMINAL_DONE
+    assert session._client.updates  # the final card update did go out
 
 
 # ---------------------------------------------------------------------------

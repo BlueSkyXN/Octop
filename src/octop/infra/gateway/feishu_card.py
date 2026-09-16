@@ -179,7 +179,15 @@ class CardKitClient:
         async with self._http.request(
             method, url, headers=await self._headers(), json=payload
         ) as resp:
-            data = await resp.json(content_type=None)
+            raw = await resp.text()
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            # CardKit endpoints have been observed to answer non-JSON bodies
+            # (e.g. settings); that is a transport failure, not a turn failure.
+            raise CardKitError(
+                f"cardkit {method} {path} returned non-JSON body: {raw[:120]!r}"
+            ) from exc
         if not isinstance(data, dict) or resp.status != 200 or data.get("code") != 0:
             body = json.dumps(data, ensure_ascii=False)[:200] if data is not None else ""
             raise CardKitError(f"cardkit {method} {path} failed: status={resp.status} body={body}")
@@ -251,6 +259,7 @@ class StreamCardSession:
         self._card_id = ""
         self._sequence = 0
         self._degraded = False
+        self._closed = False
         self._dirty = False
         self._flusher: asyncio.Task[None] | None = None
         self._client: CardKitClient | None = None
@@ -296,15 +305,21 @@ class StreamCardSession:
     # -- lifecycle --------------------------------------------------------------
 
     async def close(self, terminal: str, *, error_text: str = "") -> list[str]:
-        """Finalize the card; return texts that must be sent as plain messages."""
+        """Finalize the card; return texts that must be sent as plain messages.
+
+        Idempotent: the first successful finalization wins, so an exception
+        escaping after ``close(TERMINAL_DONE)`` cannot be "upgraded" to an
+        error card by a second close from an exception handler.
+        """
         fallback: list[str] = []
         if self._flusher is not None:
             self._flusher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._flusher
             self._flusher = None
-        if not self.active:
+        if self._closed or not self.active:
             return fallback
+        self._closed = True
 
         self.state.terminal = terminal
         self.state.error_text = error_text
@@ -323,7 +338,7 @@ class StreamCardSession:
             await self._client.update_card(
                 self._card_id, render_card(self.state, self.locale), self._sequence
             )
-        except CardKitError:
+        except Exception:
             logger.warning("Feishu stream card final update failed", exc_info=True)
             self._degraded = True
             if self.state.display_text():
@@ -334,8 +349,9 @@ class StreamCardSession:
             await self._client.close_card(
                 self._card_id, self._sequence, tr(self.state.summary_key(), self.locale)
             )
-        except CardKitError:
-            # Cosmetic: Feishu auto-closes streaming cards after 10 minutes.
+        except Exception:
+            # Cosmetic: the final card content is already live; Feishu also
+            # auto-closes streaming cards after 10 minutes.
             logger.debug("Feishu stream card close-settings failed", exc_info=True)
         return fallback
 
