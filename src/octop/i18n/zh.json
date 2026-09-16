@@ -709,6 +709,16 @@
   },
   "feishu": {
     "turn_timeout": "本轮处理超过 {minutes} 分钟预算，已停止本轮回复。请稍后重试，或把任务拆分成更小的步骤。",
-    "progress_running": "仍在处理中…（本轮已运行约 {minutes} 分钟）。"
+    "progress_running": "仍在处理中…（本轮已运行约 {minutes} 分钟）。",
+    "card": {
+      "status_thinking": "🧠 思考中…",
+      "status_tools": "正在调用工具",
+      "status_writing": "正在生成回复",
+      "summary_done": "已完成",
+      "summary_error": "出错了",
+      "tools_done": "{count} 个工具调用（已结束）",
+      "empty_reply": "（本轮未返回内容）",
+      "overflow_note": "_（内容过长，完整回复将以消息形式发送）_"
+    }
   }
 }

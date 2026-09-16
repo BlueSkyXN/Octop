@@ -709,6 +709,16 @@
   },
   "feishu": {
     "turn_timeout": "This turn exceeded its {minutes}-minute budget and was stopped. Please retry, or split the task into smaller steps.",
-    "progress_running": "Still working on it… (~{minutes} min elapsed this turn)."
+    "progress_running": "Still working on it… (~{minutes} min elapsed this turn).",
+    "card": {
+      "status_thinking": "🧠 Thinking…",
+      "status_tools": "Running tools",
+      "status_writing": "Composing reply",
+      "summary_done": "Done",
+      "summary_error": "Error",
+      "tools_done": "{count} tool calls (finished)",
+      "empty_reply": "_(no content returned this turn)_",
+      "overflow_note": "_(reply too long; full text will be sent as a message)_"
+    }
   }
 }
