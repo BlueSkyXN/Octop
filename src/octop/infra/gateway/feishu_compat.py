@@ -24,7 +24,9 @@ import logging
 from typing import Any
 
 from harness_gateway.channel import ChannelCredentialsError, MessageProcessor
-from harness_gateway.models import ContentPart, TextContent
+from harness_gateway.models import ContentPart, MessageEventType, TextContent
+
+from octop.infra.gateway import feishu_card
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,7 @@ _STOP_TIMEOUT_SECONDS = 5.0
 
 # Hardened channel defaults / knobs.
 DEFAULT_TURN_TIMEOUT_SECONDS = 600.0
-DEFAULT_PROGRESS_INTERVAL_SECONDS = 120.0
+DEFAULT_PROGRESS_INTERVAL_SECONDS = 60.0
 _BOT_INFO_RETRY_SECONDS = 300.0
 _REACTION_ACK_TIMEOUT_SECONDS = 3.0
 # Feishu represents @all with the literal open_id "all" — never a bot mention.
@@ -257,6 +259,7 @@ def _build_feishu_hardened_channel() -> type[Any]:
             constraints: Any = None,
             turn_timeout_s: float = DEFAULT_TURN_TIMEOUT_SECONDS,
             progress_interval_s: float = DEFAULT_PROGRESS_INTERVAL_SECONDS,
+            stream_card: bool = False,
         ) -> None:
             super().__init__(
                 processor,
@@ -268,9 +271,14 @@ def _build_feishu_hardened_channel() -> type[Any]:
             )
             self._hardened_turn_timeout_s = float(turn_timeout_s)
             self._hardened_progress_interval_s = float(progress_interval_s)
+            self._stream_card_enabled = bool(stream_card)
+            self._card_sessions: dict[str, Any] = {}
             self._bot_open_id = ""
             self._bot_identity_task: asyncio.Task[None] | None = None
             self._typing_reactions: dict[str, str] = {}
+            # message ids per session, swept when that session's turn ends —
+            # batched turns merge to the first id, so removal must be by session.
+            self._typing_sessions: dict[str, list[str]] = {}
             # Narrow the passive-media promise: an un-mentioned group message
             # never triggers a download, even under mention_recent visibility.
             inner_should_persist = self.group_context_manager.should_persist_media
@@ -416,6 +424,18 @@ def _build_feishu_hardened_channel() -> type[Any]:
 
                 if not is_group or bot_mentioned:
                     self._add_typing_reaction_async(message_id)
+                    session_key = self._typing_session_key(
+                        {
+                            "chat_id": message.chat_id or "",
+                            "chat_type": chat_type,
+                            "thread_id": getattr(message, "thread_id", "") or "",
+                            "to_handle": (message.chat_id if is_group else sender_id) or "",
+                        }
+                    )
+                    if session_key:
+                        pending = self._typing_sessions.setdefault(session_key, [])
+                        pending.append(message_id)
+                        del pending[:-20]
 
                 if self._enqueue_callback:
                     self._enqueue_callback(raw_payload)
@@ -464,15 +484,63 @@ def _build_feishu_hardened_channel() -> type[Any]:
         # Turn boundary: typing reaction add/remove
         # ------------------------------------------------------------------
 
+        def _typing_session_key(self, meta: dict[str, Any]) -> str:
+            """Session key shared by the receive path and the turn-end sweep."""
+            thread_id = str(meta.get("thread_id") or "")
+            if thread_id:
+                return thread_id
+            if str(meta.get("chat_type") or "") == "group":
+                return str(meta.get("chat_id") or "")
+            return str(meta.get("to_handle") or "")
+
         async def handle_inbound(self, raw_payload: object) -> None:
-            message_id = ""
-            if isinstance(raw_payload, dict):
-                message_id = str(raw_payload.get("message_id") or "")
+            message_ids = self._pending_typing_ids(raw_payload)
             try:
                 await super().handle_inbound(raw_payload)
             finally:
-                if message_id:
-                    await self._remove_typing_reaction(message_id)
+                for pending_id in message_ids:
+                    await self._remove_typing_reaction(pending_id)
+
+        def _pending_typing_ids(self, raw_payload: object) -> list[str]:
+            """Message ids whose typing reactions must be cleared at turn end.
+
+            The manager worker passes a parsed (and batch-merged) InboundMessage,
+            not the raw dict — the merged metadata keeps only the first message
+            id, so sweep the whole session rather than the merged id alone.
+            """
+            meta: dict[str, Any] = {}
+            if isinstance(raw_payload, dict):
+                sender = raw_payload.get("sender")
+                sender_id = ""
+                if isinstance(sender, dict):
+                    sender_id = str(sender.get("sender_id") or "")
+                chat_type = str(raw_payload.get("chat_type") or "")
+                chat_id = str(raw_payload.get("chat_id") or "")
+                meta = {
+                    "message_id": str(raw_payload.get("message_id") or ""),
+                    "chat_id": chat_id,
+                    "chat_type": chat_type,
+                    "thread_id": str(raw_payload.get("thread_id") or ""),
+                    "to_handle": (chat_id if chat_type == "group" else sender_id) or "",
+                }
+            else:
+                candidate = getattr(raw_payload, "metadata", None)
+                if isinstance(candidate, dict):
+                    meta = candidate
+            ids: list[str] = []
+            merged_id = str(meta.get("message_id") or "")
+            if merged_id:
+                ids.append(merged_id)
+            session_key = self._typing_session_key(meta)
+            if session_key:
+                ids.extend(self._typing_sessions.pop(session_key, []))
+            unique: list[str] = []
+            seen: set[str] = set()
+            for pending_id in ids:
+                if pending_id and pending_id not in seen:
+                    seen.add(pending_id)
+                    unique.append(pending_id)
+            return unique
 
         def _add_typing_reaction_async(self, message_id: str) -> None:
             loop = self._main_loop
@@ -561,6 +629,106 @@ def _build_feishu_hardened_channel() -> type[Any]:
                     exc_info=True,
                 )
 
+        # ------------------------------------------------------------------
+        # Streaming status card (CardKit v1) — opt-in via channel config
+        # ------------------------------------------------------------------
+
+        async def _process_inbound(self, message: Any, subject: Any) -> bool:
+            session = await self._maybe_start_card_session(subject)
+            if session is None:
+                return await super()._process_inbound(message, subject)
+            key = str(subject.subject_id)
+            self._card_sessions[key] = session
+            try:
+                succeeded = await super()._process_inbound(message, subject)
+                fallback = await session.close(
+                    feishu_card.TERMINAL_DONE if succeeded else feishu_card.TERMINAL_ERROR
+                )
+                await self._deliver_card_fallback(subject, fallback)
+                return succeeded
+            except Exception:
+                fallback = await session.close(feishu_card.TERMINAL_ERROR)
+                with contextlib.suppress(Exception):
+                    await self._deliver_card_fallback(subject, fallback)
+                raise
+            finally:
+                self._card_sessions.pop(key, None)
+
+        async def _deliver_card_fallback(self, subject: Any, texts: list[str]) -> None:
+            for text in texts:
+                await super()._send_text(subject, text)
+
+        async def _maybe_start_card_session(self, subject: Any) -> Any:
+            """Create the turn's stream card; None ⇒ plain delivery (off/unavailable)."""
+            if not self._stream_card_enabled:
+                return None
+            from octop.infra.utils.locale import resolve_user_locale
+
+            async def deliver(content: str) -> None:
+                await self._deliver(subject, msg_type="interactive", content=content)
+
+            session = feishu_card.StreamCardSession(
+                http_provider=self._ensure_http,
+                token_provider=self._refresh_token,
+                deliver=deliver,
+                locale=resolve_user_locale(channel_type="feishu"),
+            )
+            try:
+                await session.start()
+            except Exception:
+                logger.warning(
+                    "Feishu stream card unavailable; using plain messages", exc_info=True
+                )
+                return None
+            return session
+
+        def _active_card_session(self, subject: Any) -> Any:
+            session = self._card_sessions.get(str(getattr(subject, "subject_id", "") or ""))
+            if session is not None and session.active:
+                return session
+            return None
+
+        async def _send_text(self, subject: Any, text: str) -> None:
+            session = self._active_card_session(subject)
+            if session is not None:
+                session.on_text(text)
+                return
+            await super()._send_text(subject, text)
+
+        async def _on_tool_start(self, subject: Any, event: Any) -> None:
+            session = self._active_card_session(subject)
+            if session is not None:
+                session.on_tool_start(str(event.metadata.get("tool_name") or "tool"))
+                return
+            await super()._on_tool_start(subject, event)
+
+        async def _on_tool_end(self, subject: Any, event: Any) -> None:
+            session = self._active_card_session(subject)
+            if session is not None:
+                session.on_tool_end(
+                    str(event.metadata.get("tool_name") or "tool"),
+                    error=bool(event.metadata.get("is_error")),
+                )
+                return
+            await super()._on_tool_end(subject, event)
+
+        async def _deliver_event(self, subject: Any, event: Any) -> None:
+            session = self._active_card_session(subject)
+            if (
+                session is not None
+                and event.type == MessageEventType.MESSAGE
+                and event.metadata.get("progress")
+            ):
+                session.on_progress(
+                    "\n".join(
+                        part.text
+                        for part in event.content
+                        if isinstance(part, TextContent) and part.text
+                    )
+                )
+                return
+            await super()._deliver_event(subject, event)
+
     _FeishuHardenedChannel.__name__ = "FeishuHardenedChannel"
     _FeishuHardenedChannel.__qualname__ = "FeishuHardenedChannel"
     return _FeishuHardenedChannel
@@ -585,6 +753,7 @@ def build_feishu_hardened_channel(
     tenant_id: str | None = None,
     turn_timeout_s: float = DEFAULT_TURN_TIMEOUT_SECONDS,
     progress_interval_s: float = DEFAULT_PROGRESS_INTERVAL_SECONDS,
+    stream_card: bool = False,
 ) -> Any:
     """Construct a :class:`FeishuHardenedChannel` with explicit parameters."""
     cls = feishu_hardened_channel_cls()
@@ -595,6 +764,7 @@ def build_feishu_hardened_channel(
         tenant_id=tenant_id,
         turn_timeout_s=turn_timeout_s,
         progress_interval_s=progress_interval_s,
+        stream_card=stream_card,
     )
 
 

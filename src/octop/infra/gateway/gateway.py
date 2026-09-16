@@ -123,6 +123,14 @@ def _feishu_progress_interval_seconds(config: dict[str, Any]) -> float:
     return min(max(value, 30.0), 600.0)
 
 
+def _feishu_stream_card_enabled(config: dict[str, Any]) -> bool:
+    """Parse ``stream_card`` from the raw Feishu channel config (default off)."""
+    value = config.get("stream_card")
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 class Gateway:
     """Global AI interaction entry point.
 
@@ -726,6 +734,7 @@ class Gateway:
             tenant_id=row.agent_id,
             turn_timeout_s=_feishu_turn_timeout_seconds(config),
             progress_interval_s=_feishu_progress_interval_seconds(config),
+            stream_card=_feishu_stream_card_enabled(config),
         )
         await manager.add_channel(channel)
 
