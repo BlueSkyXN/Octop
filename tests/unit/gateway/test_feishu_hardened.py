@@ -133,7 +133,10 @@ def test_dm_passes_without_mention() -> None:
     payloads = _enqueue_channel(ch)
     ch._on_message_event(_sdk_event(chat_type="p2p", text="你好", mentions=[], message_id="om_d"))
     message = ch.parse_inbound(payloads[0])
-    assert "bot_mentioned" not in message.metadata
+    # 0.9.7 omits the key on DMs; 0.9.8 stamps bot_mentioned=True (a DM is
+    # always directed at the bot). Either way it must not read as False, which
+    # would make the message look like an un-mentioned group message downstream.
+    assert message.metadata.get("bot_mentioned") is not False
     assert message.channel_subject.chat_type == "direct"
     assert message.channel_subject.subject_id == "ou_user"
 

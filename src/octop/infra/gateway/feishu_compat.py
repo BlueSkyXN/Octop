@@ -72,15 +72,23 @@ async def probe_feishu_credentials(config: dict[str, Any], processor: MessagePro
 
 
 def ensure_feishu_ws_stop_fix() -> bool:
-    """Install the teardown patch once, unless the SDK provides stop()."""
+    """Install the teardown patch once, unless the SDK provides stop().
+
+    harness-gateway >= 0.9.8 ships a native ``_stop_ws_client`` (with orphan-thread
+    tracking and force semantics) that supersedes this patch.
+    """
     import lark_oapi as lark
     from harness_gateway.channels.feishu import FeishuChannel
 
-    if getattr(FeishuChannel, _PATCH_MARKER, False) or hasattr(lark.ws.Client, "stop"):
+    if (
+        getattr(FeishuChannel, _PATCH_MARKER, False)
+        or hasattr(lark.ws.Client, "stop")
+        or hasattr(FeishuChannel, "_stop_ws_client")
+    ):
         return False
 
     FeishuChannel._run_ws_thread = _fixed_run_ws_thread  # type: ignore[method-assign]
-    FeishuChannel._stop_ws_client = _fixed_stop_ws_client  # type: ignore[method-assign]
+    FeishuChannel._stop_ws_client = _fixed_stop_ws_client  # type: ignore[method-assign, assignment]
     setattr(FeishuChannel, _PATCH_MARKER, True)
     return True
 
