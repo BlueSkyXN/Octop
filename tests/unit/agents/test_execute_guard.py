@@ -76,7 +76,31 @@ def test_claim_lookup_release_cycle() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _uninstall_guard() -> None:
+    """Undo a previous install so idempotence can be asserted from scratch.
+
+    Gateway startup tests in the same process install the guard; without this
+    reset the "first call returns True" assertion depends on test ordering.
+    """
+    from harness_agent.backends import bwrap_shell, local_shell
+
+    for cls, attr in (
+        (local_shell.HarnessLocalShellBackend, "_execute_on_host"),
+        (bwrap_shell.BubbledLocalShellBackend, "execute"),
+    ):
+        wrapped = getattr(cls, attr, None)
+        if not getattr(cls, "_octop_execute_process_guard", False) or wrapped is None:
+            continue
+        for cell in getattr(wrapped, "__closure__", None) or ():
+            value = cell.cell_contents
+            if callable(value) and value is not wrapped:
+                setattr(cls, attr, value)
+                break
+        delattr(cls, "_octop_execute_process_guard")
+
+
 def test_guard_install_is_idempotent() -> None:
+    _uninstall_guard()
     first = ensure_execute_process_guard()
     second = ensure_execute_process_guard()
     assert second is False

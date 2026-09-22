@@ -16,8 +16,12 @@ from octop.infra.gateway import feishu_compat as compat
 from octop.infra.gateway.gateway import _probe_processor
 
 
-@pytest.mark.parametrize("public_stop", [False, True])
-def test_patch_guard_and_idempotence(monkeypatch: pytest.MonkeyPatch, public_stop: bool) -> None:
+@pytest.mark.parametrize(
+    ("sdk_stop", "native_stop"), [(False, False), (True, False), (False, True)]
+)
+def test_patch_guard_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch, sdk_stop: bool, native_stop: bool
+) -> None:
     import lark_oapi as lark
 
     class Channel:
@@ -26,18 +30,29 @@ def test_patch_guard_and_idempotence(monkeypatch: pytest.MonkeyPatch, public_sto
 
     original_stop = Channel._stop_ws_client
     monkeypatch.setattr(feishu, "FeishuChannel", Channel)
-    if public_stop:
+    if sdk_stop:
         monkeypatch.setattr(lark.ws.Client, "stop", lambda self: None, raising=False)
     else:
         monkeypatch.delattr(lark.ws.Client, "stop", raising=False)
+    if not native_stop:
+        delattr(Channel, "_stop_ws_client")
 
-    assert compat.ensure_feishu_ws_stop_fix() is (not public_stop)
+    should_install = not (sdk_stop or native_stop)
+    assert compat.ensure_feishu_ws_stop_fix() is should_install
     assert compat.ensure_feishu_ws_stop_fix() is False
-    if public_stop:
-        assert Channel._stop_ws_client is original_stop
-    else:
+    if should_install:
         assert Channel._stop_ws_client is compat._fixed_stop_ws_client
         assert Channel._run_ws_thread is compat._fixed_run_ws_thread
+    elif native_stop:
+        assert Channel._stop_ws_client is original_stop
+
+
+# The legacy teardown patch only installs on harness-gateway 0.9.7; from 0.9.8
+# the native _stop_ws_client supersedes it (see compat.ensure_feishu_ws_stop_fix).
+legacy_teardown_only = pytest.mark.skipif(
+    hasattr(feishu.FeishuChannel, "_stop_ws_client"),
+    reason="legacy teardown patch superseded by harness-gateway >= 0.9.8 native _stop_ws_client",
+)
 
 
 @pytest.fixture
@@ -49,9 +64,15 @@ async def live_channel(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureR
 
         monkeypatch.setattr(sdk.websockets, "connect", connect)
 
-    class Channel(feishu.FeishuChannel):
-        _run_ws_thread = compat._fixed_run_ws_thread
-        _stop_ws_client = compat._fixed_stop_ws_client
+    base = feishu.FeishuChannel
+    if hasattr(base, "_stop_ws_client"):
+        # harness-gateway >= 0.9.8 ships a native teardown; exercise it as-is.
+        Channel = base
+    else:
+
+        class Channel(base):
+            _run_ws_thread = compat._fixed_run_ws_thread
+            _stop_ws_client = compat._fixed_stop_ws_client
 
     main_loop = asyncio.get_running_loop()
     connections: asyncio.Queue[Any] = asyncio.Queue()
@@ -107,6 +128,7 @@ async def test_probe_keeps_live_channel_receiving(live_channel: Any) -> None:
     assert state.connections.empty()
 
 
+@legacy_teardown_only
 @pytest.mark.parametrize("live_channel", ["default", "legacy"], indirect=True)
 async def test_stop_and_restart_close_socket_tasks_and_loop(
     live_channel: Any, caplog: pytest.LogCaptureFixture
@@ -136,6 +158,7 @@ async def test_stop_and_restart_close_socket_tasks_and_loop(
     assert "Event loop stopped" not in caplog.text
 
 
+@legacy_teardown_only
 @pytest.mark.parametrize("close_failure", ["timeout", "error"])
 @pytest.mark.parametrize("live_channel", ["default", "legacy"], indirect=True)
 async def test_failed_disconnect_aborts_socket_and_ends_worker(
@@ -165,6 +188,7 @@ async def test_failed_disconnect_aborts_socket_and_ends_worker(
     assert state.channel._ws_client is None
 
 
+@legacy_teardown_only
 async def test_stop_does_not_block_main_loop(
     live_channel: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
