@@ -50,10 +50,12 @@ def handle_mcp_request(
             ):
                 arguments = nested
         try:
-            text = call_gateway_tool(kind, creds, str(name), arguments)
+            result = call_gateway_tool(kind, creds, str(name), arguments)
+            if isinstance(result, list):
+                return _ok(req_id, {"content": result, "isError": False})
             return _ok(
                 req_id,
-                {"content": [{"type": "text", "text": text}], "isError": False},
+                {"content": [{"type": "text", "text": result}], "isError": False},
             )
         except Exception as exc:
             logger.exception("internal mcp tool %s failed", name)

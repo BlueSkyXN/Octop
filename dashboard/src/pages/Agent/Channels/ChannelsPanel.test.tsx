@@ -38,6 +38,44 @@ beforeEach(() => {
 });
 
 describe("<ChannelsPanel /> create-flow default", () => {
+  it.each([true, false])(
+    "preserves Feishu stream_card boolean %s",
+    async (enabled) => {
+      const row = { id: "f1", kind: "feishu", name: "feishu", enabled: true };
+      api.mockImplementation(async (url, init) => {
+        if (init?.method === "PATCH") return row;
+        if (url.endsWith("/f1"))
+          return {
+            ...row,
+            config: {
+              app_id: "test",
+              app_secret: "test",
+              stream_card: enabled,
+            },
+          };
+        return [row];
+      });
+      render(<ChannelsPanel agentId="ag1" />);
+      await userEvent.click(
+        (await screen.findAllByText("channels.label_feishu"))[0],
+      );
+      const toggle = await screen.findByLabelText("channels.streamCard");
+      expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+      await userEvent.click(
+        screen.getByRole("button", { name: "common.save" }),
+      );
+      await waitFor(() => {
+        const patch = api.mock.calls.find(
+          ([, init]) => init?.method === "PATCH",
+        );
+        expect(patch).toBeDefined();
+        expect(JSON.parse(String(patch![1]!.body)).config.stream_card).toBe(
+          enabled,
+        );
+      });
+    },
+  );
+
   it("defaults Discord to all channels and saves without channel IDs", async () => {
     render(<ChannelsPanel agentId="ag1" />);
     await userEvent.click(

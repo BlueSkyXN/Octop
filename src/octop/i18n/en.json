@@ -1,4 +1,15 @@
 {
+  "feishu": {
+    "turn_timeout": "This turn exceeded its {minutes}-minute budget and was stopped. Please retry, or split the task into smaller steps.",
+    "progress_running": "Still working on it… (~{minutes} min elapsed this turn).",
+    "download": {
+      "resource": "Downloaded message resource {name} ({size} bytes)",
+      "not_image": "; not an image, so no inline preview is available.",
+      "disabled": "; inline images are disabled by configuration.",
+      "too_large": "; the image exceeds the {limit}-byte inline limit.",
+      "image": "Downloaded image ({size} bytes, {mime}); see the image content block."
+    }
+  },
   "slash": {
     "error": {
       "unknown_command": "Unknown command: /{name}. Type /help for available commands."

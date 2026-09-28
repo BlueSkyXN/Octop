@@ -65,6 +65,7 @@ async def test_register_stream_mode_uses_original_processor(tmp_path: Path) -> N
     gw._channel_manager.get_channel = MagicMock(return_value=MagicMock())
     gw._processor = MagicMock()
     row = _fake_row()
+    row.kind = "dingtalk"
     row.config_json = '{"app_id":"x","app_secret":"y","response_mode":"stream"}'
 
     await gw._register_channel(row)

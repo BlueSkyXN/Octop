@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import json
+import logging
+import os
 import shlex
+import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
 
+from octop.i18n import tr
 from octop.infra.connectors.gateway.cli_dirs import resolve_cli_config_key
 from octop.infra.connectors.gateway.cli_runner import resolve_binary, run_cli
 from octop.infra.connectors.gateway.feishu_creds import prepare_feishu_cli_env
+from octop.infra.gateway.media.attachment_hints import (
+    VISION_MAX_BYTES,
+    sniff_image_media_type,
+)
+from octop.infra.utils.locale import resolve_user_locale
 from octop.infra.utils.paths import PathLayout
+
+logger = logging.getLogger(__name__)
 
 _KIND = "feishu-cli"
 # MCP tool name → lark-cli domain
@@ -25,6 +40,12 @@ _USER_ONLY_SHORTCUTS = frozenset(
         ("docs", "+search"),
     }
 )
+
+# Explicit message-resource download shortcut: the only path allowed to turn
+# downloaded bytes into an image block for the model.
+_MESSAGE_RESOURCE_DOWNLOAD = "+messages-resources-download"
+_IMAGE_BLOCKS_ENV = "OCTOP_CONNECTOR_IMAGE_BLOCKS"
+_DOWNLOAD_TIMEOUT_S = 120.0
 
 _USER_AUTH_REQUIRED_MSG = (
     "文档搜索需要先完成飞书账号授权。"
@@ -114,7 +135,7 @@ def list_tools() -> list[dict[str, Any]]:
     return TOOLS
 
 
-def call_tool(creds: dict[str, Any], name: str, args: dict[str, Any]) -> str:
+def call_tool(creds: dict[str, Any], name: str, args: dict[str, Any]) -> str | list[dict[str, Any]]:
     binary = resolve_binary("lark-cli")
     try:
         if name == "help":
@@ -145,11 +166,90 @@ def call_tool(creds: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         ):
             raise ValueError(_MISSING_SEARCH_SCOPE_MSG)
         raw_args = args.get("args")
+        if isinstance(raw_args, str):
+            # Models trained against the MCP schema may send the object arg as
+            # a JSON string; parse it back instead of dropping it.
+            with contextlib.suppress(json.JSONDecodeError):
+                raw_args = json.loads(raw_args)
         payload: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
         argv = _build_argv(binary, domain, method, payload, identity=identity)
+        if domain == "im" and tokens[0] == _MESSAGE_RESOURCE_DOWNLOAD:
+            return _run_message_resource_download(argv, env)
         return run_cli(argv, env=env)
     except ValueError as exc:
         raise ValueError(_humanize_cli_error(str(exc))) from exc
+
+
+def _image_blocks_enabled() -> bool:
+    raw = os.environ.get(_IMAGE_BLOCKS_ENV, "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _parse_json_output(out: str) -> dict[str, Any]:
+    text = out.strip()
+    if not text.startswith("{"):
+        if "{" in text:
+            text = text[text.find("{") :]
+        else:
+            return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _run_message_resource_download(
+    argv: list[str], env: dict[str, str]
+) -> str | list[dict[str, Any]]:
+    """Run the download shortcut inside an op-owned temp dir and inline images.
+
+    Only files inside this operation's temp directory are trusted; size comes
+    from ``os.stat`` and the format from magic bytes — never from the JSON
+    fields or the file name.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="octop-feishu-dl-"))
+    try:
+        out = run_cli(argv, env=env, timeout_s=_DOWNLOAD_TIMEOUT_S, cwd=str(tmp))
+        payload = _parse_json_output(out)
+        data = payload.get("data")
+        saved = str(
+            payload.get("saved_path")
+            or (data.get("saved_path") if isinstance(data, dict) else "")
+            or ""
+        )
+        if not saved:
+            return out
+        path = Path(saved)
+        if not path.is_absolute():
+            path = tmp / path
+        try:
+            path = path.resolve()
+            path.relative_to(tmp.resolve())
+        except (ValueError, OSError):
+            logger.warning("feishu download reported a path outside its temp dir: %s", saved[:64])
+            return out
+        if not path.is_file():
+            return out
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            head = fh.read(16)
+        mime = sniff_image_media_type(head)
+        locale = resolve_user_locale(channel_type="feishu")
+        note = tr("feishu.download.resource", locale, name=path.name, size=size)
+        if mime is None:
+            return note + tr("feishu.download.not_image", locale)
+        if not _image_blocks_enabled():
+            return note + tr("feishu.download.disabled", locale)
+        if size > VISION_MAX_BYTES:
+            return note + tr("feishu.download.too_large", locale, limit=VISION_MAX_BYTES)
+        encoded = base64.b64encode(path.read_bytes()).decode()
+        return [
+            {"type": "text", "text": tr("feishu.download.image", locale, size=size, mime=mime)},
+            {"type": "image", "data": encoded, "mimeType": mime},
+        ]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _has_user_scope(binary: str, env: dict[str, str], scope: str) -> bool:

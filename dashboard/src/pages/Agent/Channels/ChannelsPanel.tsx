@@ -196,6 +196,7 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
         for (const [k, v] of Object.entries(cfg)) {
           if (v === undefined || v === null) continue;
           if (row.kind === "qq" && k === "show_progress") continue;
+          if (k === "stream_card") continue;
           if (
             CHANNEL_DISPLAY_CONFIG_KEYS.includes(
               k as (typeof CHANNEL_DISPLAY_CONFIG_KEYS)[number],
@@ -239,6 +240,8 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
               ? cfg.show_tool_hints
               : DEFAULT_CHANNEL_DISPLAY_CONFIG.show_tool_hints,
           ...formCfg,
+          stream_card:
+            row.kind === "feishu" ? cfg.stream_card === true : undefined,
           ...(row.kind === "discord"
             ? { allow_all_channels: cfg.allow_all_channels !== false }
             : {}),

@@ -701,6 +701,12 @@ class Gateway:
         else:
             response_mode = normalize_channel_response_mode(config.get("response_mode"))
         processor = processor_for_response_mode(self._processor, response_mode)
+        if row.kind == "feishu":
+            from octop.infra.gateway.process.turn_budget import (  # noqa: PLC0415
+                processor_with_feishu_budget,
+            )
+
+            processor = processor_with_feishu_budget(processor, config)
         manager = self._require_channel_manager()
         await manager.add_channel(
             row.kind,

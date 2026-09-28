@@ -288,6 +288,22 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
       label: "Verification Token",
       type: "password",
     },
+    {
+      name: "turn_timeout_seconds",
+      label: "channels.turnTimeoutSeconds",
+      placeholder: "600",
+    },
+    {
+      name: "progress_interval_seconds",
+      label: "channels.progressIntervalSeconds",
+      placeholder: "60",
+    },
+    {
+      name: "group_context",
+      label: "channels.feishuGroupPolicy",
+      type: "json",
+      placeholder: '{"enabled": true, "activation": "mention"}',
+    },
   ],
   dingtalk: [
     {

@@ -9,7 +9,26 @@ from octop_harness.mcp import mcp_args_model, sanitize_llm_tool_name
 
 from octop.infra.connectors.catalog import ConnectorCatalogEntry, is_inprocess_gateway
 from octop.infra.connectors.gateway.protocol import handle_mcp_request
-from octop.infra.connectors.gateway.registry import mcp_tools_for_kind
+from octop.infra.connectors.gateway.registry import GatewayToolResult, mcp_tools_for_kind
+
+
+def _content_to_result(content: list[Any]) -> GatewayToolResult:
+    if len(content) == 1 and isinstance(content[0], dict) and content[0].get("type") == "text":
+        return str(content[0].get("text") or "")
+    blocks: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "image":
+            blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{block['mimeType']};base64,{block['data']}"},
+                }
+            )
+        else:
+            blocks.append(block)
+    return blocks
 
 
 def build_gateway_langchain_tools(
@@ -28,7 +47,9 @@ def build_gateway_langchain_tools(
     out: list[Any] = []
 
     def _tool_fn(kind: str, tool_name: str) -> Any:
-        def _run(**kwargs: Any) -> str:
+        def _run(**kwargs: Any) -> GatewayToolResult:
+            from langchain_core.tools import ToolException  # noqa: PLC0415
+
             # Null stripping for args_schema happens in harness mcp_args_model.
             cleaned = {k: v for k, v in kwargs.items() if v is not None}
             resp = handle_mcp_request(
@@ -42,19 +63,19 @@ def build_gateway_langchain_tools(
                 },
             )
             if not isinstance(resp, dict):
-                return "gateway error"
+                raise ToolException("gateway error")
             if resp.get("error"):
                 err = resp.get("error") or {}
-                return str(err.get("message") or err)
+                raise ToolException(str(err.get("message") or err))
             result = resp.get("result") or {}
             if result.get("isError"):
                 content = result.get("content") or []
                 if content and isinstance(content[0], dict):
-                    return str(content[0].get("text") or "tool error")
-                return "tool error"
+                    raise ToolException(str(content[0].get("text") or "tool error"))
+                raise ToolException("tool error")
             content = result.get("content") or []
-            if content and isinstance(content[0], dict) and content[0].get("text"):
-                return str(content[0]["text"])
+            if content:
+                return _content_to_result(content)
             return json.dumps(result, ensure_ascii=False)
 
         return _run
@@ -73,6 +94,7 @@ def build_gateway_langchain_tools(
                 name=lc_name,
                 description=str(tool_def.get("description") or name),
                 args_schema=mcp_args_model(lc_name, input_schema),
+                handle_tool_error=True,
             )
         )
     return out

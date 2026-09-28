@@ -1,4 +1,15 @@
 {
+  "feishu": {
+    "turn_timeout": "本轮处理超过 {minutes} 分钟预算，已停止本轮回复。请稍后重试，或把任务拆分成更小的步骤。",
+    "progress_running": "仍在处理中…（本轮已运行约 {minutes} 分钟）。",
+    "download": {
+      "resource": "已下载消息资源 {name}（{size} 字节）",
+      "not_image": "，非图片格式，未内联展示。",
+      "disabled": "，图片内联展示已由配置关闭。",
+      "too_large": "，图片超过 {limit} 字节上限，未内联展示。",
+      "image": "已下载图片资源（{size} 字节，{mime}），图片见下方输入块。"
+    }
+  },
   "slash": {
     "error": {
       "unknown_command": "未知指令：/{name}。输入 /help 查看可用指令。"

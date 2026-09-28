@@ -2559,8 +2559,8 @@ requires-dist = [
     { name = "mss", marker = "extra == 'desktop'", specifier = ">=9.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "octop-browser", specifier = ">=1.0.0" },
-    { name = "octop-gateway", specifier = ">=1.0.0" },
-    { name = "octop-harness", extras = ["all"], specifier = ">=1.0.0" },
+    { name = "octop-gateway", git = "https://github.com/BlueSkyXN/octop-gateway.git?rev=1ddcd5a6611bc3205d2b4fdc28c4387d6892f487" },
+    { name = "octop-harness", extras = ["all"], git = "https://github.com/BlueSkyXN/octop-harness.git?rev=418ce889db91b027e93f5f7b68d8b8efcef23208" },
     { name = "octop-memory", specifier = ">=1.0.0" },
     { name = "onnxruntime", marker = "extra == 'knowledge-ocr'", specifier = ">=1.17" },
     { name = "openpyxl", specifier = ">=3.1" },
@@ -2626,7 +2626,7 @@ wheels = [
 [[package]]
 name = "octop-gateway"
 version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/BlueSkyXN/octop-gateway.git?rev=1ddcd5a6611bc3205d2b4fdc28c4387d6892f487#1ddcd5a6611bc3205d2b4fdc28c4387d6892f487" }
 dependencies = [
     { name = "aiohttp" },
     { name = "cryptography" },
@@ -2643,15 +2643,11 @@ dependencies = [
     { name = "websockets" },
     { name = "wecom-aibot-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/94/6c/b24f7d8d9f975a7dbe47bcd616429d5a0d75153b2dc0866d6136e653b2db/octop_gateway-1.0.0.tar.gz", hash = "sha256:3630e9f9d40014d961bf8839c19759a676da6e311057df064885fc69cdd789fa", size = 608199, upload-time = "2026-09-24T09:52:46.666Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/77/c6d42986b1140c148da0f4777bbff31d189179f2bc69ac276392a73f8589/octop_gateway-1.0.0-py3-none-any.whl", hash = "sha256:bb4aeee8b8bbf683f15d29f8adcff9f5c4963544276c56dca858b01eed78ecaa", size = 160304, upload-time = "2026-09-24T09:52:45.299Z" },
-]
 
 [[package]]
 name = "octop-harness"
 version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/BlueSkyXN/octop-harness.git?rev=418ce889db91b027e93f5f7b68d8b8efcef23208#418ce889db91b027e93f5f7b68d8b8efcef23208" }
 dependencies = [
     { name = "deepagents" },
     { name = "httpx" },
@@ -2667,10 +2663,6 @@ dependencies = [
     { name = "octop-browser" },
     { name = "octop-memory" },
     { name = "pyyaml" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/53/84/618b1299758b0ddd5fcf9f6740d154c64ece333bff28e949cdfd335364f0/octop_harness-1.0.0.tar.gz", hash = "sha256:63d049380547723de0756f1c4c307d5844281a098eb1b43fc0c30e8c98a8db2f", size = 931797, upload-time = "2026-09-24T10:13:33.321Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/bc/726ceefa15fb84e54d10a4f078839c94758c680bfd4f2e67f9755e96630f/octop_harness-1.0.0-py3-none-any.whl", hash = "sha256:8448fbb9e5d6884d826a149cd8f58a65f690c1a8f3a0c52bf79da99b8319504e", size = 1133881, upload-time = "2026-09-24T10:13:32.064Z" },
 ]
 
 [package.optional-dependencies]

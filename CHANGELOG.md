@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Fork 组件迁移
+- 飞书 CardKit、Typing 清理、轻量凭据探测和提及识别由 `octop-gateway` 原生实现；移除主库子类/运行时方法补丁方案。
+- 本地命令取消与预算接口、MCP 对象/数组参数归入 `octop-harness`，主库依赖锁定到已验证的 fork 提交。
+- 保留主库飞书回复预算、进度心跳、连接器图片下载及多模态传递，补齐流式卡片开关的布尔值回归测试。
+- 分仓归属及复现方式见 `docs/feishu-component-migration.md`；不改发布分支，不触发生产部署。
+
 ### 修复
 - 暗色主题下知识库 Markdown 预览白底白字导致正文不可见（补上未定义的 `--fn-bg-container` 主题变量，Fixes #1215）。
 

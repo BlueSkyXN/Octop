@@ -64,6 +64,9 @@ async def collapse_to_invoke_response(
             continue
 
         if event.type == MessageEventType.MESSAGE:
+            if event.metadata.get("progress"):
+                yield event
+                continue
             for part in event.content:
                 if isinstance(part, TextContent):
                     text = part.text.strip()
