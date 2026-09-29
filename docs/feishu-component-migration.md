@@ -2,12 +2,13 @@
 
 ## 基线与仓库
 
-本次从 Octop `upstream/develop` 的 `4667bd7b` 创建
-`feature/feishu-component-migration`。它与当时的 `upstream/main`（1.0.2b4）
-代码相同，差异仅为发布版本及文档。旧 `fork/image`、`feature/feishu-stream-card`
-保留原状；本分支保留原镜像发布工作流，但只推功能分支，不打 `img-v*` 标签，
-不自动构建或部署生产镜像。迁移完成后记录 `fork/image@86226c65` 为 merge parent，
-防止日后合回发布分支时把旧 monkey-patch 文件重新引入；其代码以本文逐项归属为准。
+本次从 Octop `upstream/develop` 创建 `feature/feishu-component-migration`，
+初始基线 `4667bd7b`（1.0.2b4 后）。上游发布 1.0.2b5（`ded7addd`）后已跟进合并
+（merge commit `3b517efa`，完整 `make all` 3966 项全绿）。旧 `fork/image`、
+`feature/feishu-stream-card` 保留原状；本分支保留原镜像发布工作流，但只推功能分支，
+不打 `img-v*` 标签，不自动构建或部署生产镜像。迁移完成后记录
+`fork/image@86226c65` 为 merge parent，防止日后合回发布分支时把旧 monkey-patch
+文件重新引入；其代码以本文逐项归属为准。
 
 GitHub fork 保持官方名称；本地都在 `/Volumes/TP4000PRO/Program`：
 
